@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f2eb">
+  <title>Mnémosyne — explorer l’histoire des villes</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Mnémosyne, accueil"><span class="brand-icon">M</span><span>mnémosyne<small>ATLAS DES MÉMOIRES LOCALES</small></span></a>
+    <nav aria-label="Navigation principale">
+      <button class="nav-button active" data-view="research">Explorer</button>
+      <button class="nav-button" data-view="archives">Mes dossiers <span id="archive-count" class="count">0</span></button>
+      <button class="nav-button" data-view="compare">Comparer</button>
+    </nav>
+    <span class="local-badge"><span></span> Vos dossiers restent sur cet ordinateur</span>
+  </header>
+
+  <main>
+    <section id="view-research" class="view">
+      <div class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="eyebrow-line"></span> RECHERCHE HISTORIQUE DOCUMENTAIRE</div>
+          <h1>Une ville, mille<br><em>histoires à découvrir.</em></h1>
+          <p>Rassemblez les ressources, les repères chronologiques et les lieux de mémoire d’un territoire.</p>
+        </div>
+        <div class="hero-stamp" aria-hidden="true"><span>⟡</span><small>EXPLORER<br>TRANSMETTRE</small><span class="stamp-year">MMXXV</span></div>
+      </div>
+
+      <form id="search-form" class="search-panel">
+        <label for="query">Quel lieu souhaitez-vous explorer ?</label>
+        <div class="search-row">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="query" name="query" maxlength="200" required placeholder="Ex. Laon, Aisne, France" autocomplete="off">
+          <button class="primary-button" type="submit"><span>⌕</span> Lancer la recherche</button>
+        </div>
+        <div class="search-hint"><span class="hint-star">✳</span> Précisez le département ou le pays pour distinguer les lieux homonymes.</div>
+        <div id="search-status" class="status" role="status" aria-live="polite"></div>
+      </form>
+
+      <section id="welcome" class="welcome-grid" aria-label="Fonctionnalités">
+        <article class="welcome-card"><span>01</span><h2>Sources documentaires</h2><p>Catalogues et fonds numériques à explorer, de Gallica à Persée.</p></article>
+        <article class="welcome-card"><span>02</span><h2>Chronologie vivante</h2><p>Des repères historiques sourcés, à vérifier et à enrichir.</p></article>
+        <article class="welcome-card"><span>03</span><h2>Patrimoine en carte</h2><p>Les lieux, les traces disparues et les cartes anciennes.</p></article>
+      </section>
+      <div id="dossier" hidden></div>
+    </section>
+
+    <section id="view-archives" class="view" hidden>
+      <div class="page-heading"><div class="eyebrow"><span class="eyebrow-line"></span> VOTRE BIBLIOTHÈQUE LOCALE</div><h1>Mes dossiers <em>archivés.</em></h1><p>Chaque actualisation conserve une nouvelle version de votre recherche.</p></div>
+      <div id="archive-list"></div>
+    </section>
+
+    <section id="view-compare" class="view" hidden>
+      <div class="page-heading"><div class="eyebrow"><span class="eyebrow-line"></span> METTRE EN PERSPECTIVE</div><h1>Comparer deux <em>villes.</em></h1><p>Alignez les repères de deux dossiers archivés pour explorer leurs trajectoires, siècle par siècle.</p></div>
+      <div class="compare-controls">
+        <label>Première ville<select id="compare-a"></select></label>
+        <span class="compare-mark">↔</span>
+        <label>Seconde ville<select id="compare-b"></select></label>
+        <button id="compare-button" class="primary-button">Comparer</button>
+      </div>
+      <div id="comparison" class="comparison"></div>
+    </section>
+    <footer><span>MNÉMOSYNE · ATLAS DES MÉMOIRES LOCALES</span><span>Une piste documentaire n’est pas une source vérifiée.</span></footer>
+  </main>
+</body>
+</html>
