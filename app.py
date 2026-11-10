@@ -15,9 +15,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html.parser import HTMLParser
 from pathlib import Path
 
+import synthesis
+
 ROOT = Path(__file__).resolve().parent
 DATABASE = ROOT / "mnemosyne.sqlite3"
-USER_AGENT = "Mnemosyne/1.0 (application locale de recherche historique)"
+USER_AGENT = "Mnemosyne/1.0 (https://github.com/Thalyn-/Mnemosyne; application locale de recherche historique)"
 MAX_BODY = 2_000_000
 
 
@@ -47,11 +49,16 @@ def fetch(url, params, accept="application/json"):
         return response.read(4_000_000)
 
 
+def locality(query):
+    """Conserver les précisions pour le choix du lieu, mais chercher son nom dans les catalogues."""
+    return query.split(",", 1)[0].strip()
+
+
 def wikipedia(query):
     base = "https://fr.wikipedia.org/w/api.php"
     found = json.loads(fetch(base, {
-        "action": "query", "list": "search", "srsearch": query,
-        "srlimit": 5, "format": "json",
+        "action": "query", "list": "search", "srsearch": locality(query),
+        "srlimit": 10, "format": "json",
     }))
     candidates = found.get("query", {}).get("search", [])
     if not candidates:
@@ -90,6 +97,37 @@ def make_timeline(page):
     return sorted(events, key=lambda event: event["year"])
 
 
+def textual_clues(page):
+    """Extraire des passages attribués, sans inventer des débats ou des édifices."""
+    traces, questions = [], []
+    building = re.compile(
+        r"\b(ch[aâ]teau|forteresse|fortifications?|remparts?|enceinte|"
+        r"abbaye|[eé]glise|chapelle|porte|citadelle|fort|vestiges?|monast[eè]re)\b",
+        re.IGNORECASE,
+    )
+    lost = re.compile(
+        r"\b(d[eé]truit\w*|d[eé]moli\w*|dispar\w*|ras[eé]\w*|"
+        r"ruin[eé]\w*|n'existe plus|ne subsiste|ne reste|vestiges?)\b",
+        re.IGNORECASE,
+    )
+    dispute = re.compile(
+        r"\b(d[eé]bat\w*|controvers\w*|contest[eé]\w*|discut[eé]\w*|"
+        r"incertain\w*|hypoth[eè]ses?|divergent\w*|"
+        r"les historiens ne s'accordent pas|origine inconnue)\b",
+        re.IGNORECASE,
+    )
+    for raw in re.split(r"(?<=[.!?])\s+|\n+", page.get("extract", "")):
+        text = re.sub(r"\s+", " ", raw).strip(" =")
+        if not 30 <= len(text) <= 500:
+            continue
+        clue = {"text": text, "source": page.get("url", "")}
+        if building.search(text) and lost.search(text) and clue not in traces:
+            traces.append(clue)
+        if dispute.search(text) and clue not in questions:
+            questions.append(clue)
+    return traces[:20], questions[:20]
+
+
 def gallica(query):
     raw = fetch("https://gallica.bnf.fr/SRU", {
         "operation": "searchRetrieve", "version": "1.2",
@@ -99,7 +137,10 @@ def gallica(query):
     root = ET.fromstring(raw)
     ns = {"srw": "http://www.loc.gov/zing/srw/",
           "dc": "http://purl.org/dc/elements/1.1/"}
-    count = int(root.findtext("srw:numberOfRecords", default="0", namespaces=ns))
+    count_text = root.findtext("srw:numberOfRecords", namespaces=ns)
+    if count_text is None:
+        raise ValueError("Gallica n'a pas renvoyé de nombre de résultats.")
+    count = int(count_text)
     records = []
     for record in root.findall(".//srw:recordData", ns):
         title = record.findtext(".//dc:title", default="Document sans titre", namespaces=ns)
@@ -122,6 +163,31 @@ def internet_archive(query):
              "url": "https://archive.org/details/" + urllib.parse.quote(doc["identifier"], safe="")}
             for doc in response["docs"] if doc.get("identifier")
         ],
+    }
+
+
+def wikisource(query):
+    data = json.loads(fetch("https://fr.wikisource.org/w/api.php", {
+        "action": "query", "list": "search", "srsearch": query,
+        "srlimit": 10, "format": "json",
+    }))
+    result = data["query"]
+    return {
+        "count": result.get("searchinfo", {}).get("totalhits", len(result["search"])),
+        "records": [
+            {"title": item["title"],
+             "url": "https://fr.wikisource.org/wiki/" + urllib.parse.quote(item["title"].replace(" ", "_"))}
+            for item in result["search"]
+        ],
+    }
+
+
+def congress(query):
+    payload = json.loads(fetch("https://www.loc.gov/search/", {"q": query, "fo": "json", "c": 10}))
+    return {
+        "count": payload.get("pagination", {}).get("total", len(payload.get("results", []))),
+        "records": [{"title": item.get("title") or "Document sans titre", "url": item["id"]}
+                    for item in payload.get("results", []) if item.get("id")],
     }
 
 
@@ -167,13 +233,17 @@ def wikidata(qid):
     PREFIX wikibase: <http://wikiba.se/ontology#>
     PREFIX bd: <http://www.bigdata.com/rdf#>
     SELECT ?item ?itemLabel ?kind ?coord ?date WHERE {
-      { ?item wdt:P19 wd:%s; wdt:P31 wd:Q5. BIND("person" AS ?kind)
-        OPTIONAL { ?item wdt:P569 ?date. } }
+      { SELECT DISTINCT ?item ?kind ?date WHERE {
+          ?item wdt:P19 wd:%s; wdt:P31 wd:Q5.
+          BIND("person" AS ?kind) OPTIONAL { ?item wdt:P569 ?date. }
+        } LIMIT 30 }
       UNION
-      { ?item wdt:P131 wd:%s; wdt:P31/wdt:P279* wd:Q811979.
-        BIND("place" AS ?kind) OPTIONAL { ?item wdt:P625 ?coord. } }
+      { SELECT DISTINCT ?item ?kind ?coord WHERE {
+          ?item wdt:P131 wd:%s; wdt:P31/wdt:P279* wd:Q811979.
+          BIND("place" AS ?kind) OPTIONAL { ?item wdt:P625 ?coord. }
+        } LIMIT 30 }
       SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
-    } LIMIT 60""" % (qid, qid)
+    }""" % (qid, qid)
     data = json.loads(fetch("https://query.wikidata.org/sparql", {
         "query": query, "format": "json",
     }))
@@ -233,9 +303,9 @@ def catalogue(query, page):
         ("Cairn", "Publications scientifiques", "https://shs.cairn.info/resultats_recherche?searchTerm=" + q, "lien"),
         ("OpenEdition", "Revues et livres", "https://search.openedition.org/?q=" + q, "lien"),
         ("HAL", "Travaux académiques", "https://hal.science/search/index/?q=" + q, "lien"),
-        ("Wikisource", "Textes historiques", "https://fr.wikisource.org/w/index.php?search=" + q, "lien"),
+        ("Wikisource", "Textes historiques", "https://fr.wikisource.org/w/index.php?search=" + q, "automatique"),
         ("Internet Archive", "Livres et archives", "https://archive.org/search?query=" + q, "automatique"),
-        ("Bibliothèque du Congrès", "Collections américaines", "https://www.loc.gov/search/?q=" + q, "lien"),
+        ("Bibliothèque du Congrès", "Collections américaines", "https://www.loc.gov/search/?q=" + q, "automatique"),
         ("Franklin Papers", "Correspondances historiques", "https://franklinpapers.org/", "lien"),
         ("Founders Online", "Correspondances historiques", "https://founders.archives.gov/?q=" + q, "lien"),
         ("Wikipédia", "Synthèse et pistes",
@@ -262,33 +332,78 @@ def catalogue(query, page):
 
 
 def research(query):
-    errors, outcomes = [], {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    errors, outcomes, status = [], {}, {}
+    city = locality(query)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
         jobs = {
             "Wikipédia": pool.submit(wikipedia, query),
-            "Gallica": pool.submit(gallica, query),
-            "Internet Archive": pool.submit(internet_archive, query),
+            "Gallica": pool.submit(gallica, city),
+            "Internet Archive": pool.submit(internet_archive, city),
+            "Wikisource": pool.submit(wikisource, city),
+            "Bibliothèque du Congrès": pool.submit(congress, city),
         }
         for name, job in jobs.items():
             try:
                 outcomes[name] = job.result()
+                status[name] = "ok"
             except Exception as error:
                 errors.append(f"{name} : {error}")
+                status[name] = "error"
     page = outcomes.get("Wikipédia", {})
     people, places = [], []
     if page:
         try:
             people, places = wikidata(page.get("qid"))
+            status["Wikidata"] = "ok"
         except Exception as error:
             errors.append(f"Wikidata : {error}")
+            status["Wikidata"] = "error"
+    else:
+        status["Wikidata"] = "skipped"
+    traces, questions = textual_clues(page)
+    synthesis_status = "source_absente"
+    synthesis_detail = "La page nécessaire à l'analyse n'a pas été obtenue."
+    if page.get("extract") and page.get("url"):
+        try:
+            model, generated = synthesis.synthesize(query, page)
+            synthesis_status = "ok" if any(generated.values()) else "empty"
+            synthesis_detail = (
+                f"Synthèse locale : {model}. Chaque citation doit être vérifiée."
+                if synthesis_status == "ok" else
+                f"Le modèle local {model} n'a fourni aucune proposition avec citation exploitable."
+            )
+            timeline = generated["events"] or make_timeline(page)
+            for person in generated["people"]:
+                if not any(existing["name"].casefold() == person["name"].casefold() for existing in people):
+                    people.append({"name": person["name"], "detail": person["text"],
+                                   "source": person["source"], "evidence": person["evidence"]})
+            for place in generated["places"]:
+                if not any(existing["name"].casefold() == place["name"].casefold() for existing in places):
+                    places.append({"name": place["name"], "detail": place["text"],
+                                   "category": place["category"], "source": place["source"],
+                                   "evidence": place["evidence"], "lat": None, "lon": None})
+            traces = generated["traces"] or traces
+            questions = generated["questions"] or questions
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            timeline = make_timeline(page)
+            synthesis_status = "unavailable"
+            synthesis_detail = (
+                f"Analyse locale indisponible : {error}. "
+                "Voir la section « Analyse locale facultative » du guide."
+            )
+    else:
+        timeline = make_timeline(page) if page else []
     return {
         "query": query,
         "page": {key: value for key, value in page.items() if key != "extract"},
-        "sources": catalogue(query, page),
+        "sources": catalogue(city, page),
         "results": {key: value for key, value in outcomes.items() if key != "Wikipédia"},
-        "timeline": make_timeline(page) if page else [],
-        "people": people, "places": places,
+        "timeline": sorted(timeline, key=lambda event: event["year"]),
+        "people": people[:30], "places": places[:30],
         "traces": [], "questions": [], "persee": [],
+        "trace_clues": traces, "question_clues": questions,
+        "source_status": status,
+        "synthesis_status": synthesis_status, "synthesis_detail": synthesis_detail,
         "errors": errors,
     }
 
@@ -402,7 +517,17 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Lancer Mnémosyne sur cet ordinateur.")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--diagnostic", action="store_true",
+                        help="Vérifier les services sans créer de dossier ni démarrer le serveur.")
+    parser.add_argument("--ville", default="Laon", help="Lieu recherché pour le diagnostic.")
     args = parser.parse_args()
+    if args.diagnostic:
+        import diagnostic
+        try:
+            print("\n".join(diagnostic.run(args.ville)))
+        except ValueError as error:
+            parser.error(str(error))
+        raise SystemExit(0)
     initialize()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Mnémosyne est disponible sur http://127.0.0.1:{args.port}", flush=True)

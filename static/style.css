@@ -72,6 +72,7 @@ h1 em{color:var(--green);font-weight:500}
 .event:before{content:"";position:absolute;left:-30px;top:5px;width:9px;height:9px;background:var(--paper);border:2px solid #829783;border-radius:50%}
 .event strong{color:var(--green);font:500 16px var(--serif);margin-right:10px}
 .event p{display:inline;margin:0;color:#535d54}
+.event .evidence{display:block;color:#758078;font-size:10px;margin-top:4px}
 .event a{font-size:9px;color:#788477;margin-left:7px}
 .people-grid,.place-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .person-card,.place-card{background:white;border:1px solid var(--line);padding:11px}
@@ -88,6 +89,7 @@ h1 em{color:var(--green);font-weight:500}
 .map-tools select{font-size:10px;padding:6px;border:1px solid var(--line);background:white}
 .map-tools input{vertical-align:middle;accent-color:var(--green)}
 #map{height:370px;background:#e8e9df;border:1px solid var(--line);z-index:0}
+.map-fallback{width:100%;height:100%;border:0}
 .map-number{display:grid;place-items:center;width:25px;height:25px;border:2px solid white;border-radius:50%;background:#415d4a;color:white;font:700 10px system-ui, sans-serif;box-shadow:0 1px 5px #18231870}
 .map-note{font-size:9px;color:var(--muted);margin-top:7px}
 .persée-button{background:white;border:1px solid var(--line);color:var(--green);padding:8px 11px;font-size:10px}

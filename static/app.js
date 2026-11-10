@@ -70,16 +70,22 @@
     }
   });
 
-  function sourceLink(name, type, url, mode) {
+  function sourceLink(name, type, url, mode, statuses) {
+    const service = name === "Gallica · BnF" ? "Gallica" : name;
+    const status = statuses?.[service];
+    const label = mode !== "automatique" ? "OUVRIR ↗" :
+      status === "ok" ? "RÉPONSE REÇUE" :
+      status === "error" ? "ÉCHEC" :
+      status === "skipped" ? "NON INTERROGÉ" : "STATUT INCONNU";
     return `<a class="source-card" href="${escapeHtml(safeUrl(url))}" target="_blank" rel="noopener noreferrer">
       <span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(type)}</small></span>
-      <span class="source-mode">${mode === "automatique" ? "INTERROGÉ" : "OUVRIR ↗"}</span></a>`;
+      <span class="source-mode">${label}</span></a>`;
   }
 
   function renderResults(data) {
     const rows = Object.entries(data.results || {}).flatMap(([name, result]) =>
       (result.records || []).map((record) =>
-        `<article class="result-item"><a href="${escapeHtml(safeUrl(record.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(record.title)}</a>
+        `<article class="result-item">${record.url ? `<a href="${escapeHtml(safeUrl(record.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(record.title)}</a>` : escapeHtml(record.title)}
         <small>${escapeHtml(name)} · ${escapeHtml(result.count)} résultat(s) signalé(s)</small></article>`));
     return rows.length ? `<div class="result-list">${rows.join("")}</div>` :
       `<p class="subtle">Aucun document retourné par les catalogues interrogés ; utilisez les liens de recherche ci-dessus.</p>`;
@@ -89,10 +95,16 @@
     const events = data.timeline || [];
     if (!events.length) return `<p class="empty">Aucun repère chronologique exploitable n’a été trouvé. Vérifiez la page retenue et consultez les sources.</p>`;
     const selected = showAllEvents ? events : events.slice(0, 10);
-    const rows = selected.map((event) => `<div class="event">
+    const rows = selected.map((event) => {
+      const persee = new URL("https://www.persee.fr/search");
+      persee.searchParams.set("q", `${data.query.split(",")[0].trim()} ${event.year}`);
+      return `<div class="event">
       <strong>${escapeHtml(event.year)}</strong><p>${escapeHtml(event.text)}</p>
       ${event.source ? `<a href="${escapeHtml(safeUrl(event.source))}" target="_blank" rel="noopener noreferrer">Source ↗</a>` : ""}
-      </div>`).join("");
+      <a href="${escapeHtml(persee.href)}" target="_blank" rel="noopener noreferrer">Persée : ville et date ↗</a>
+      ${event.evidence ? `<p class="evidence">Extrait : « ${escapeHtml(event.evidence)} »</p>` : ""}
+      </div>`;
+    }).join("");
     const more = events.length > 10
       ? `<button class="more-button" id="timeline-toggle">${showAllEvents ? "Réduire" : `Tout voir (${events.length})`}</button>` : "";
     return `<div class="timeline">${rows}</div>${more}`;
@@ -103,21 +115,34 @@
     if (!people.length) return `<p class="empty">Aucune personnalité liée trouvée dans les données interrogées. Ce résultat ne signifie pas qu’il n’en existe pas.</p>`;
     return `<div class="people-grid">${people.map((person) => `<article class="person-card">
       <strong>${escapeHtml(person.name)}</strong><small>${escapeHtml(person.detail)}</small>
-      <a href="${escapeHtml(safeUrl(person.source))}" target="_blank" rel="noopener noreferrer">Référence Wikidata ↗</a>
+      <a href="${escapeHtml(safeUrl(person.source))}" target="_blank" rel="noopener noreferrer">Voir la source ↗</a>
+      ${person.evidence ? `<small>Extrait : « ${escapeHtml(person.evidence)} »</small>` : ""}
       </article>`).join("")}</div>`;
   }
 
   function renderPlaces(data) {
     const places = data.places || [];
     if (!places.length) return `<p class="empty">Aucun lieu patrimonial associé trouvé. Complétez cette liste après vérification des sources locales.</p>`;
-    return `<div class="place-grid">${places.map((place, index) => `<article class="place-card">
+    const order = { "indispensable": 0, "recommandé": 1, "en bonus": 2 };
+    const ranked = places.map((place, index) => ({ place, index }))
+      .sort((a, b) => (order[a.place.category] ?? 3) - (order[b.place.category] ?? 3));
+    return `<div class="place-grid">${ranked.map(({ place, index }) => `<article class="place-card">
       <span class="rank">${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(place.name)}</strong>
       <small>${escapeHtml(place.detail)}</small>
       <a href="${escapeHtml(safeUrl(place.source))}" target="_blank" rel="noopener noreferrer">Voir la référence ↗</a><br>
+      ${place.evidence ? `<small>Extrait : « ${escapeHtml(place.evidence)} »</small>` : ""}
       <select aria-label="Importance de ${escapeHtml(place.name)}" data-place="${index}">
         ${["indispensable", "recommandé", "en bonus"].map((rank) =>
           `<option ${place.category === rank ? "selected" : ""}>${rank}</option>`).join("")}
       </select></article>`).join("")}</div>`;
+  }
+
+  function renderClues(clues, empty) {
+    if (!clues?.length) return `<p class="subtle">${escapeHtml(empty)}</p>`;
+    return `<div class="result-list">${clues.map((clue) => `<article class="result-item">
+      ${escapeHtml(clue.text)} <a href="${escapeHtml(safeUrl(clue.source))}" target="_blank" rel="noopener noreferrer">Voir le passage source ↗</a>
+      ${clue.evidence ? `<small>Extrait : « ${escapeHtml(clue.evidence)} »</small>` : ""}
+      </article>`).join("")}</div>`;
   }
 
   function renderPersee(data) {
@@ -154,15 +179,16 @@
         <button class="button-light" id="export-html">Exporter en HTML</button>
       </div></div>
       <div class="notice"><strong>À vérifier :</strong> les pistes de recherche et les faits extraits de bases de données ne remplacent pas la lecture des documents. La chronologie provient de la page de synthèse indiquée, pas d’une validation historienne.</div>
+      ${data.synthesis_detail ? `<div class="notice"><strong>Analyse documentaire :</strong> ${escapeHtml(data.synthesis_detail)}</div>` : ""}
       ${(data.errors || []).length ? `<div class="notice error-list"><strong>Services indisponibles :</strong><br>${data.errors.map(escapeHtml).join("<br>")}</div>` : ""}
       <section class="section"><div class="section-head"><div><h3><span class="section-index">01</span>Sources documentaires</h3><p>Les liens ouvrent les catalogues ; seuls les services indiqués sont interrogés automatiquement.</p></div></div>
-        <div class="source-grid">${(data.sources || []).map((source) => sourceLink(source.name, source.type, source.url, source.mode)).join("")}</div>
+        <div class="source-grid">${(data.sources || []).map((source) => sourceLink(source.name, source.type, source.url, source.mode, data.source_status)).join("")}</div>
         ${renderResults(data)}</section>
       <section class="section"><div class="section-head"><div><h3><span class="section-index">02</span>Repères chronologiques</h3><p>${(data.timeline || []).length} piste(s) datée(s) · source : page de synthèse retenue</p></div>
         <button class="persée-button" id="persee-button">Chercher des articles dans Persée ↗</button></div>
         <div id="persee-status" class="status"></div><div id="persee-results">${renderPersee(data)}</div>
         ${renderTimeline(data)}</section>
-      <section class="section"><div class="section-head"><div><h3><span class="section-index">03</span>Personnalités</h3><p>${(data.people || []).length} nom(s) liés dans Wikidata · sélection non exhaustive.</p></div></div>${renderPeople(data)}</section>
+      <section class="section"><div class="section-head"><div><h3><span class="section-index">03</span>Personnalités</h3><p>${(data.people || []).length} nom(s) issus des sources consultées · sélection non exhaustive.</p></div></div>${renderPeople(data)}</section>
       <section class="section"><div class="section-head"><div><h3><span class="section-index">04</span>Lieux à découvrir</h3><p>Classez les pistes selon leur intérêt après vérification.</p></div></div>${renderPlaces(data)}</section>
       <section class="section"><div class="section-head"><div><h3><span class="section-index">05</span>Carte et traces disparues</h3><p>Les marqueurs correspondent aux lieux renseignés ci-dessus.</p></div></div>
         <div class="map-tools"><label for="historic-layer">Calque historique</label><select id="historic-layer">
@@ -171,14 +197,18 @@
         </select><label for="layer-opacity">Transparence <input id="layer-opacity" type="range" min="0" max="100" value="65"></label></div>
         <div id="map" role="application" aria-label="Carte interactive des lieux patrimoniaux"></div>
         <p class="map-note" id="map-note">Les cartes anciennes dépendent de la disponibilité des couches du Géoportail. Les emplacements des traces disparues sont à documenter ci-dessous.</p>
+        <h4>Passages signalant une disparition ou des vestiges</h4>
+        ${renderClues(data.trace_clues, "Aucun passage correspondant trouvé dans le texte consulté ; cette absence ne prouve pas qu’il n’existe aucune trace.")}
         <label class="subtle" for="traces-input">Traces disparues ou transformées · une entrée par ligne (lieu, emplacement ou référence)</label>
         <textarea id="traces-input" class="editable" placeholder="Ex. Ancienne enceinte — emplacement approximatif, à confirmer dans les plans d’archives.">${escapeHtml((data.traces || []).join("\n"))}</textarea>
       </section>
-      <section class="section"><div class="section-head"><div><h3><span class="section-index">06</span>Questions ouvertes</h3><p>Indiquez les débats documentés, avec leurs références bibliographiques.</p></div></div>
+      <section class="section"><div class="section-head"><div><h3><span class="section-index">06</span>Questions ouvertes</h3><p>Passages signalant une incertitude ou un débat : à confronter à des travaux scientifiques.</p></div></div>
+        ${renderClues(data.question_clues, "Aucun passage formulant un débat ou une incertitude n’a été repéré dans le texte consulté.")}
         <label class="subtle" for="questions-input">Questions historiques, culturelles ou religieuses · une question par ligne</label>
         <textarea id="questions-input" class="editable" placeholder="Ajoutez une question débattue et une référence vérifiable.">${escapeHtml((data.questions || []).join("\n"))}</textarea>
       </section>`;
     $("#timeline-toggle")?.addEventListener("click", () => {
+      collectNotes();
       showAllEvents = !showAllEvents;
       renderDossier(current);
     });
@@ -208,21 +238,36 @@
 
   function setupMap(data) {
     if (map) { map.remove(); map = null; mapMarkers = null; }
-    if (!window.L) {
-      $("#map-note").textContent = "La carte nécessite une connexion pour charger Leaflet et OpenStreetMap.";
-      return;
-    }
     const page = data.page || {};
-    const lat = Number(page.lat);
-    const lon = Number(page.lon);
+    const lat = page.lat;
+    const lon = page.lon;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       $("#map-note").textContent = "Aucune coordonnée fiable n’a été trouvée pour cette page.";
+      $("#map").textContent = "Carte indisponible : aucune coordonnée n’a été obtenue.";
+      return;
+    }
+    if (!window.L) {
+      const bounds = [lon - 0.035, lat - 0.02, lon + 0.035, lat + 0.02].join(",");
+      const url = new URL("https://www.openstreetmap.org/export/embed.html");
+      url.searchParams.set("bbox", bounds);
+      url.searchParams.set("layer", "mapnik");
+      url.searchParams.set("marker", `${lat},${lon}`);
+      const frame = document.createElement("iframe");
+      frame.title = "Carte OpenStreetMap de la commune";
+      frame.src = url.href;
+      frame.className = "map-fallback";
+      $("#map").appendChild(frame);
+      $("#map-note").textContent = "Leaflet n’a pas pu être chargé : la carte de secours n’affiche ni les lieux ni les calques historiques.";
       return;
     }
     map = L.map("map").setView([lat, lon], 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
+    });
+    baseLayer.on("tileerror", () => {
+      $("#map-note").textContent = "Le fond OpenStreetMap ne peut pas être chargé. Vérifiez la connexion et les éventuels blocages réseau.";
+    });
+    baseLayer.addTo(map);
     mapMarkers = L.layerGroup().addTo(map);
     L.marker([lat, lon]).bindPopup(`<strong>${escapeHtml(page.title || data.query)}</strong><br>Centre indiqué par la source`).addTo(mapMarkers);
     (data.places || []).forEach((place, index) => {
@@ -267,7 +312,7 @@
   }
 
   async function saveNotes() {
-    if (!current) return;
+    if (!current) return false;
     collectNotes();
     const button = $("#save-button");
     button.disabled = true;
@@ -277,14 +322,17 @@
       });
       button.textContent = "Notes enregistrées";
       setTimeout(() => { if (button.isConnected) button.textContent = "Enregistrer mes notes"; }, 1800);
+      return true;
     } catch (error) {
-      button.disabled = false;
       alert(error.message);
+      return false;
+    } finally {
+      button.disabled = false;
     }
   }
 
   async function refresh() {
-    await saveNotes();
+    if (!await saveNotes()) return;
     const button = $("#refresh-button");
     button.disabled = true;
     button.textContent = "Actualisation en cours…";
@@ -304,10 +352,7 @@
   async function searchPersee() {
     const button = $("#persee-button");
     const status = $("#persee-status");
-    const words = (current.data.timeline || []).flatMap((item) =>
-      item.text.match(/[^\W\d_]{5,}/gu) || []);
-    const keywords = [...new Set(words.map((word) => word.toLocaleLowerCase("fr-FR")))].slice(0, 5);
-    const query = [current.data.query.split(",")[0], ...keywords].join(" ");
+    const query = current.data.query.split(",")[0].trim();
     button.disabled = true;
     status.textContent = "Recherche des articles dans le catalogue Persée…";
     status.classList.remove("error");
@@ -444,7 +489,9 @@
       "", "## Repères chronologiques", ...(data.timeline || []).map((event) => `- **${event.year}** — ${event.text} [Source](${event.source})`),
       "", "## Personnalités", ...(data.people || []).map((person) => `- ${person.name} — ${person.detail} [Wikidata](${person.source})`),
       "", "## Lieux à découvrir", ...(data.places || []).map((place) => `- **${place.category || "à vérifier"}** — ${place.name} (${place.detail})`),
+      "", "## Passages signalant des traces disparues", ...(data.trace_clues || []).map((clue) => `- ${clue.text} [Source](${clue.source})`),
       "", "## Traces disparues", ...(data.traces || []).map((trace) => `- ${trace}`),
+      "", "## Passages signalant des incertitudes", ...(data.question_clues || []).map((clue) => `- ${clue.text} [Source](${clue.source})`),
       "", "## Questions ouvertes", ...(data.questions || []).map((question) => `- ${question}`),
       "", "> Les pistes historiques sont à vérifier auprès des sources citées."];
     download(lines.join("\n"), filename("md"), "text/markdown;charset=utf-8");
@@ -468,7 +515,9 @@
       <p>Les éléments ci-dessous sont des pistes à vérifier auprès des sources.</p>
       ${list("Sources documentaires", sources)}${list("Repères chronologiques", events)}
       ${list("Personnalités", people)}${list("Lieux à découvrir", places)}
+      ${list("Passages signalant des traces disparues", (data.trace_clues || []).map((clue) => `<li>${escapeHtml(clue.text)} <a href="${escapeHtml(safeUrl(clue.source))}">Source</a></li>`).join(""))}
       ${list("Traces disparues", (data.traces || []).map((item) => `<li>${escapeHtml(item)}</li>`).join(""))}
+      ${list("Passages signalant des incertitudes", (data.question_clues || []).map((clue) => `<li>${escapeHtml(clue.text)} <a href="${escapeHtml(safeUrl(clue.source))}">Source</a></li>`).join(""))}
       ${list("Questions ouvertes", (data.questions || []).map((item) => `<li>${escapeHtml(item)}</li>`).join(""))}
       </body></html>`;
     download(output, filename("html"), "text/html;charset=utf-8");
